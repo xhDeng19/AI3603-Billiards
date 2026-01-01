@@ -32,29 +32,55 @@ class NewAgent(Agent):
             my_targets = ['8']
         last_state_snapshot = {bid: copy.deepcopy(ball) for bid, ball in balls.items()}
         candidates = self._generate_candidates(balls, my_targets, table)
-        # 第一阶段：快速评估所有候选（每个3次仿真）
+        # 第一阶段：快速评估所有候选（每个2次仿真）
         prelim_scores = []
         for action in candidates:
             agg = 0.0
-            for _ in range(3):
+            for _ in range(2):
                 shot = self._simulate_action(balls, table, action)
                 agg += -500.0 if shot is None else self._analyze_shot_for_reward(shot, last_state_snapshot, my_targets)
-            prelim_scores.append(agg / 3.0)
+            prelim_scores.append(agg / 2.0)
         # 选出Top-K进入精评
         k = min(8, len(candidates))
         top_indices = np.argsort(prelim_scores)[-k:]
         best_action = None
         best_score = -1e9
+        best_robust = -1e9
         for idx in top_indices:
             action = candidates[int(idx)]
             agg = 0.0
-            for _ in range(7):
+            contact = 0
+            cue_pocket = 0
+            sims = 5
+            for _ in range(sims):
                 shot = self._simulate_action(balls, table, action)
-                agg += -500.0 if shot is None else self._analyze_shot_for_reward(shot, last_state_snapshot, my_targets)
-            avg = agg / 7.0
-            if avg > best_score:
+                if shot is None:
+                    agg += -500.0
+                else:
+                    agg += self._analyze_shot_for_reward(shot, last_state_snapshot, my_targets)
+                    ids_first = None
+                    valid_ids = {'1','2','3','4','5','6','7','8','9','10','11','12','13','14','15'}
+                    for e in shot.events:
+                        et = str(e.event_type).lower()
+                        ids = list(e.ids) if hasattr(e, 'ids') else []
+                        if ('cushion' not in et) and ('pocket' not in et) and ('cue' in ids):
+                            others = [i for i in ids if i != 'cue' and i in valid_ids]
+                            if others:
+                                ids_first = others[0]
+                                break
+                    if ids_first in my_targets:
+                        contact += 1
+                    new_pocketed = [bid for bid, b in shot.balls.items() if b.state.s == 4 and last_state_snapshot[bid].state.s != 4]
+                    if 'cue' in new_pocketed:
+                        cue_pocket += 1
+            avg = agg / sims
+            robust = avg + 20.0 * (contact / sims) - 45.0 * (cue_pocket / sims)
+            if robust > best_robust:
+                best_robust = robust
                 best_score = avg
                 best_action = action
+        if best_action is not None:
+            best_action = self._local_refine(balls, table, best_action, last_state_snapshot, my_targets)
         if best_action is None or best_score < 10:
             safety_actions = self._generate_safety_candidates(balls, table)
             if len(safety_actions) > 0:
@@ -62,10 +88,32 @@ class NewAgent(Agent):
                 best_safe_score = -1e9
                 for sa in safety_actions:
                     agg = 0.0
-                    for _ in range(7):
+                    sims = 5
+                    contact = 0
+                    cue_pocket = 0
+                    for _ in range(sims):
                         shot = self._simulate_action(balls, table, sa)
-                        agg += -500.0 if shot is None else self._analyze_shot_for_reward(shot, last_state_snapshot, my_targets)
-                    avg = agg / 7.0
+                        if shot is None:
+                            agg += -500.0
+                        else:
+                            agg += self._analyze_shot_for_reward(shot, last_state_snapshot, my_targets)
+                            ids_first = None
+                            valid_ids = {'1','2','3','4','5','6','7','8','9','10','11','12','13','14','15'}
+                            for e in shot.events:
+                                et = str(e.event_type).lower()
+                                ids = list(e.ids) if hasattr(e, 'ids') else []
+                                if ('cushion' not in et) and ('pocket' not in et) and ('cue' in ids):
+                                    others = [i for i in ids if i != 'cue' and i in valid_ids]
+                                    if others:
+                                        ids_first = others[0]
+                                        break
+                            if ids_first in my_targets:
+                                contact += 1
+                            new_pocketed = [bid for bid, b in shot.balls.items() if b.state.s == 4 and last_state_snapshot[bid].state.s != 4]
+                            if 'cue' in new_pocketed:
+                                cue_pocket += 1
+                    avg = agg / sims
+                    robust = avg + 20.0 * (contact / sims) - 45.0 * (cue_pocket / sims)
                     if avg > best_safe_score:
                         best_safe_score = avg
                         best_safe = sa
@@ -133,6 +181,26 @@ class NewAgent(Agent):
                 return False
         return True
 
+    def _first_ball_along_phi(self, cue_pos, phi, balls, ignore_ids):
+        p = np.array(cue_pos[:2])
+        ang = math.radians(phi % 360)
+        v = np.array([math.cos(ang), math.sin(ang)])
+        best_id = None
+        best_t = 1e9
+        for bid, ball in balls.items():
+            if bid in ignore_ids:
+                continue
+            c = np.array(ball.state.rvw[0][:2])
+            w = c - p
+            t = np.dot(w, v)
+            if t <= 0:
+                continue
+            perp = np.linalg.norm(w - t * v)
+            if perp <= self.ball_radius * 1.05 and t < best_t:
+                best_t = t
+                best_id = bid
+        return best_id
+
     def _generate_candidates(self, balls, my_targets, table):
         actions = []
         cue_ball = balls.get('cue')
@@ -191,27 +259,50 @@ class NewAgent(Agent):
                     actions.append({'V0': v_center, 'phi': phi_center, 'theta': 0.0, 'a': 0.0, 'b': -0.02})
                     actions.append({'V0': v_center, 'phi': (phi_center + 0.8) % 360, 'theta': 0.0, 'a': 0.01, 'b': -0.02})
                     actions.append({'V0': v_center, 'phi': (phi_center - 0.8) % 360, 'theta': 0.0, 'a': -0.01, 'b': -0.02})
+                if dist_center > self.ball_radius * 1.2:
+                    try:
+                        delta = math.degrees(math.asin(min(0.95, self.ball_radius / max(dist_center, 1e-6))))
+                    except Exception:
+                        delta = 0.0
+                    for dphi in [0.0, delta, -delta, 2*delta, -2*delta]:
+                        phi_tan = (phi_center + dphi) % 360
+                        first_id = self._first_ball_along_phi(cue_pos, phi_tan, balls, ignore_ids={'cue'})
+                        if first_id == tid:
+                            v_tan = float(np.clip(1.0 + dist_center * 1.0, 0.8, 5.5))
+                            actions.append({'V0': v_tan, 'phi': phi_tan, 'theta': 0.0, 'a': 0.0, 'b': -0.02})
         if len(actions) == 0:
             cp = np.array(cue_pos)
-            xs = [0.0, table.l]
-            ys = [0.0, table.w]
-            targets = []
-            targets.append(np.array([xs[0], cp[1], cp[2]]))
-            targets.append(np.array([xs[1], cp[1], cp[2]]))
-            targets.append(np.array([cp[0], ys[0], cp[2]]))
-            targets.append(np.array([cp[0], ys[1], cp[2]]))
-            best = None
-            bestd = 1e9
-            for t in targets:
-                d = np.linalg.norm(t[:2] - cp[:2])
-                if d < bestd:
-                    bestd = d
-                    best = t
-            v_base = float(np.clip(1.2 + bestd * 0.8, 0.8, 5.0))
-            phi_ideal = self._calc_angle(best[:2] - cp[:2])
-            actions.append({'V0': v_base, 'phi': phi_ideal, 'theta': 0.0, 'a': 0.0, 'b': -0.02})
-            actions.append({'V0': min(v_base + 0.8, 6.0), 'phi': phi_ideal, 'theta': 0.0, 'a': 0.0, 'b': -0.02})
-            actions.append({'V0': v_base, 'phi': (phi_ideal + 0.7) % 360, 'theta': 0.0, 'a': 0.02, 'b': -0.02})
+            target_ids_scan = target_ids if len(target_ids) > 0 else [tid]
+            for sid in target_ids_scan:
+                if sid not in balls:
+                    continue
+                sp = np.array(balls[sid].state.rvw[0][:2])
+                dist_s = np.linalg.norm(sp - cp[:2])
+                phi_s = self._calc_angle(sp - cp[:2])
+                for dphi in [0.0, 0.6, -0.6, 1.2, -1.2, 2.0, -2.0]:
+                    phi_try = (phi_s + dphi) % 360
+                    first_id = self._first_ball_along_phi(cue_pos, phi_try, balls, ignore_ids={'cue'})
+                    if first_id == sid:
+                        v_s = float(np.clip(1.1 + dist_s * 0.9, 0.8, 5.0))
+                        actions.append({'V0': v_s, 'phi': phi_try, 'theta': 0.0, 'a': 0.0, 'b': -0.02})
+            if len(actions) == 0:
+                cp = np.array(cue_pos)
+                xs = [0.0, table.l]
+                ys = [0.0, table.w]
+                targets = [np.array([xs[0], cp[1], cp[2]]), np.array([xs[1], cp[1], cp[2]]),
+                           np.array([cp[0], ys[0], cp[2]]), np.array([cp[0], ys[1], cp[2]])]
+                best = None
+                bestd = 1e9
+                for t in targets:
+                    d = np.linalg.norm(t[:2] - cp[:2])
+                    if d < bestd:
+                        bestd = d
+                        best = t
+                v_base = float(np.clip(1.2 + bestd * 0.8, 0.8, 5.0))
+                phi_ideal = self._calc_angle(best[:2] - cp[:2])
+                actions.append({'V0': v_base, 'phi': phi_ideal, 'theta': 0.0, 'a': 0.0, 'b': -0.02})
+                actions.append({'V0': min(v_base + 0.8, 6.0), 'phi': phi_ideal, 'theta': 0.0, 'a': 0.0, 'b': -0.02})
+                actions.append({'V0': v_base, 'phi': (phi_ideal + 0.7) % 360, 'theta': 0.0, 'a': 0.02, 'b': -0.02})
         random.shuffle(actions)
         return actions[:24]
 
@@ -222,25 +313,37 @@ class NewAgent(Agent):
             return actions
         cue_pos = cue_ball.state.rvw[0]
         cp = np.array(cue_pos)
-        xs = [0.0, table.l]
-        ys = [0.0, table.w]
-        targets = []
-        targets.append(np.array([xs[0], cp[1], cp[2]]))
-        targets.append(np.array([xs[1], cp[1], cp[2]]))
-        targets.append(np.array([cp[0], ys[0], cp[2]]))
-        targets.append(np.array([cp[0], ys[1], cp[2]]))
-        best = None
-        bestd = 1e9
-        for t in targets:
-            d = np.linalg.norm(t[:2] - cp[:2])
-            if d < bestd:
-                bestd = d
-                best = t
-        v_base = float(np.clip(1.2 + bestd * 0.8, 0.8, 5.0))
-        phi_ideal = self._calc_angle(best[:2] - cp[:2])
-        actions.append({'V0': v_base, 'phi': phi_ideal, 'theta': 0.0, 'a': 0.0, 'b': -0.02})
-        actions.append({'V0': min(v_base + 0.6, 6.0), 'phi': phi_ideal, 'theta': 0.0, 'a': 0.0, 'b': -0.02})
-        actions.append({'V0': v_base, 'phi': (phi_ideal + 0.5) % 360, 'theta': 0.0, 'a': 0.02, 'b': -0.02})
+        target_ids = []
+        for bid, ball in balls.items():
+            if bid == 'cue' or ball.state.s == 4:
+                continue
+            target_ids.append(bid)
+        target_ids_sorted = sorted(target_ids, key=lambda bid: np.linalg.norm(np.array(balls[bid].state.rvw[0][:2]) - cp[:2]))
+        for sid in target_ids_sorted[:5]:
+            sp = np.array(balls[sid].state.rvw[0][:2])
+            dist_s = np.linalg.norm(sp - cp[:2])
+            phi_s = self._calc_angle(sp - cp[:2])
+            for dphi in [0.0, 0.6, -0.6, 1.2, -1.2, 2.0, -2.0]:
+                phi_try = (phi_s + dphi) % 360
+                first_id = self._first_ball_along_phi(cue_pos, phi_try, balls, ignore_ids={'cue'})
+                if first_id == sid:
+                    v_s = float(np.clip(1.0 + dist_s * 0.9, 0.8, 5.0))
+                    actions.append({'V0': v_s, 'phi': phi_try, 'theta': 0.0, 'a': 0.0, 'b': -0.02})
+        if len(actions) == 0:
+            xs = [0.0, table.l]
+            ys = [0.0, table.w]
+            targets = [np.array([xs[0], cp[1], cp[2]]), np.array([xs[1], cp[1], cp[2]]),
+                       np.array([cp[0], ys[0], cp[2]]), np.array([cp[0], ys[1], cp[2]])]
+            best = None
+            bestd = 1e9
+            for t in targets:
+                d = np.linalg.norm(t[:2] - cp[:2])
+                if d < bestd:
+                    bestd = d
+                    best = t
+            v_base = float(np.clip(1.2 + bestd * 0.8, 0.8, 5.0))
+            phi_ideal = self._calc_angle(best[:2] - cp[:2])
+            actions.append({'V0': v_base, 'phi': phi_ideal, 'theta': 0.0, 'a': 0.0, 'b': -0.02})
         return actions
 
     def _simulate_action(self, balls, table, action):
@@ -259,6 +362,9 @@ class NewAgent(Agent):
             return shot
         except Exception:
             return None
+
+    def _local_refine(self, balls, table, action, last_state_snapshot, my_targets):
+        return action
 
     def _random_action(self):
         V0 = round(random.uniform(0.8, 5.0), 2)

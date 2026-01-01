@@ -14,36 +14,42 @@
 ## 关键算法
 - 幽灵球几何
   - 思路：将目标球沿着通往袋口的方向回退一个“两个球半径”的距离，得到“幽灵球”位置；白球指向幽灵球中心的连线即理想击打方向。
-  - 位置：new_agent.py 的 ghost 计算函数 [new_agent.py:_ghost_target](file:///d:/SJTU/2025.9/Principles_and_Applications_of_Artificial_Intelligence/Final_Project/agents/new_agent.py#L69-L79)。
+  - 位置：new_agent.py 的 ghost 计算函数 [new_agent.py:_ghost_target](file:///d:/SJTU/2025.9/Principles_and_Applications_of_Artificial_Intelligence/Final_Project/agents/new_agent.py#L136-L146)。
 - 遮挡判定
   - 思路：对“白球→幽灵球”线段与“目标球→袋口”线段分别做直线-圆最近距离判定，若小于球半径则视为遮挡，剔除该路线。
-  - 位置：白球路径 [new_agent.py:_has_clear_path](file:///d:/SJTU/2025.9/Principles_and_Applications_of_Artificial_Intelligence/Final_Project/agents/new_agent.py#L87-L104)，目标球路径 [new_agent.py:_has_clear_path_obj_to_pocket](file:///d:/SJTU/2025.9/Principles_and_Applications_of_Artificial_Intelligence/Final_Project/agents/new_agent.py#L106-L121)。
+  - 位置：白球路径 [new_agent.py:_has_clear_path](file:///d:/SJTU/2025.9/Principles_and_Applications_of_Artificial_Intelligence/Final_Project/agents/new_agent.py#L148-L165)，目标球路径 [new_agent.py:_has_clear_path_obj_to_pocket](file:///d:/SJTU/2025.9/Principles_and_Applications_of_Artificial_Intelligence/Final_Project/agents/new_agent.py#L166-L182)。
+ - 首碰判定（射线近似）
+  - 思路：沿给定 φ 方向从白球做射线，计算与各球的垂距与前向投影，选择满足垂距≤球半径且投影t>0的最小t作为“首个可接触球”。用于筛选“保证首碰己方球”的候选与安全球。
+  - 位置： [new_agent.py:_first_ball_along_phi](file:///d:/SJTU/2025.9/Principles_and_Applications_of_Artificial_Intelligence/Final_Project/agents/new_agent.py#L183-L197)。
 - 候选生成
   - 对每个未进袋的己方目标球与最近的 3 个袋口，计算理想角度与距离，映射力度 v_base（上限 5.8）。近距离时略微收敛力度避免过冲。
   - 微扰版本：角度微调 ±0.5° 与 ±1.0°，结合轻回旋 b≈-0.02；引入“落位侧旋”（a≈±0.03），根据目标球到己方目标质心的相对方向选择左右侧旋以改善下一杆连贯性。
   - 中心击打候选：若白球至目标球中心的直线路径可行，加入“直接击打目标球中心”的候选（含 ±0.8° 微调与轻回旋），降低“未接触任何球”的犯规概率。
+  - 保证首碰候选：为每个目标球计算与中心方向的“切线偏移”角 δ≈arcsin(R/dist)，尝试 φ±δ、±2δ 等，使用“首碰判定”仅保留首球为该目标球的候选。
   - 若无进攻路线，生成安全球（白球指向最近库边，θ=0，轻回旋 b≈-0.02，力度按距离映射）。
-  - 位置：候选生成入口 [new_agent.py:_generate_candidates](file:///d:/SJTU/2025.9/Principles_and_Applications_of_Artificial_Intelligence/Final_Project/agents/new_agent.py#L105-L163)，安全球生成 [new_agent.py:_generate_safety_candidates](file:///d:/SJTU/2025.9/Principles_and_Applications_of_Artificial_Intelligence/Final_Project/agents/new_agent.py#L165-L187)。
+  - 安全球（保证接触版）：优先扫描最近的若干球，围绕中心方向尝试多组 φ 微偏，使用“首碰判定”只保留首碰为该球的候选；若仍无，则退化到库边安全球。
+  - 位置：候选生成入口 [new_agent.py:_generate_candidates](file:///d:/SJTU/2025.9/Principles_and_Applications_of_Artificial_Intelligence/Final_Project/agents/new_agent.py#L184-L264)，安全球生成 [new_agent.py:_generate_safety_candidates](file:///d:/SJTU/2025.9/Principles_and_Applications_of_Artificial_Intelligence/Final_Project/agents/new_agent.py#L293-L322)。
 - 带噪仿真
   - 在候选仿真中对动作参数注入噪声并裁剪至合法范围，模拟真实环境扰动。
-  - 位置：仿真函数 [new_agent.py:_simulate_action](file:///d:/SJTU/2025.9/Principles_and_Applications_of_Artificial_Intelligence/Final_Project/agents/new_agent.py#L149-L164)。
+  - 位置：仿真函数 [new_agent.py:_simulate_action](file:///d:/SJTU/2025.9/Principles_and_Applications_of_Artificial_Intelligence/Final_Project/agents/new_agent.py#L294-L309)。
 - 评分函数（对齐裁判）
   - 加分：己方进球（+50/球）、合法打进黑8（+100）、合法无进球（+10）。
   - 扣分：白球入袋（-100）、非法黑8或同杆白+黑8（-150）、首球犯规（-30）、无进球且未碰库（-30）、对方球入袋（-20/球）、未接触任何球额外惩罚（-70，总计约-100）。
-  - 位置：评分函数 [new_agent.py:_analyze_shot_for_reward](file:///d:/SJTU/2025.9/Principles_and_Applications_of_Artificial_Intelligence/Final_Project/agents/new_agent.py#L166-L220)。
+  - 位置：评分函数 [new_agent.py:_analyze_shot_for_reward](file:///d:/SJTU/2025.9/Principles_and_Applications_of_Artificial_Intelligence/Final_Project/agents/new_agent.py#L376-L434)。
 
 ## 决策流程
-- 清台判定：若 my_targets 全进袋，目标切换为 ['8']（必须首碰黑8）。见 [decision](file:///d:/SJTU/2025.9/Principles_and_Applications_of_Artificial_Intelligence/Final_Project/agents/new_agent.py#L19-L63) 中的剩余目标判断与切换。
+ - 清台判定：若 my_targets 全进袋，目标切换为 ['8']（必须首碰黑8）。见 [decision](file:///d:/SJTU/2025.9/Principles_and_Applications_of_Artificial_Intelligence/Final_Project/agents/new_agent.py#L19-L130) 中的剩余目标判断与切换。
 - 两阶段评分：
-  - 第一阶段对全部候选进行 3 次带噪仿真，选出 Top-8 候选。
-  - 第二阶段对 Top-8 每个候选进行 7 次带噪仿真，取平均分选最优。
+  - 第一阶段对全部候选进行 2 次带噪仿真，选出 Top-8 候选。
+  - 第二阶段对 Top-8 每个候选进行 5 次带噪仿真，取“鲁棒评分”选最优（平均分 + 20×首碰己方率 − 45×白球落袋率）。
+  - 局部微调：保留接口以便扩展，当前版本为稳定性直接返回最优动作，避免极端情况下仿真超时风险。
   - 回退策略：当最佳动作平均分低于阈值（如 <10）时，评估安全球候选（7 次仿真），从中选择最佳，不再使用完全随机动作。
 
 ## 重要参数与范围
 - 球半径：ball_radius = 0.028575。见 [new_agent.py:L15-L17](file:///d:/SJTU/2025.9/Principles_and_Applications_of_Artificial_Intelligence/Final_Project/agents/new_agent.py#L15-L17)。
 - 仿真噪声（Agent 侧）：V0=0.1、phi=0.12、theta=0.08、a/b=0.004。见 [new_agent.py:L15-L17](file:///d:/SJTU/2025.9/Principles_and_Applications_of_Artificial_Intelligence/Final_Project/agents/new_agent.py#L15-L17)。
 - 力度映射（更稳健）：v_base ≈ 1.2 + 1.2 × 距离，裁剪至 [1.0, 5.8]；冗余力度 v_base+0.6（上限 6.0），并加入轻微回旋 b≈-0.02 以降低白球入袋风险。
-- 动作范围：V0∈[0.5,8.0]、phi∈[0,360)、theta∈[0,90]、a/b∈[-0.5,0.5]；最终返回时统一裁剪。见 [decision](file:///d:/SJTU/2025.9/Principles_and_Applications_of_Artificial_Intelligence/Final_Project/agents/new_agent.py#L57-L63)。
+ - 动作范围：V0∈[0.5,8.0]、phi∈[0,360)、theta∈[0,90]、a/b∈[-0.5,0.5]；最终返回时统一裁剪。见 [decision](file:///d:/SJTU/2025.9/Principles_and_Applications_of_Artificial_Intelligence/Final_Project/agents/new_agent.py#L125-L130)。
 - 环境噪声与裁剪：参考 [poolenv.py:L259-L277](file:///d:/SJTU/2025.9/Principles_and_Applications_of_Artificial_Intelligence/Final_Project/poolenv.py#L259-L277) 的噪声与裁剪逻辑。
 
 ## 评估与调试
@@ -66,9 +72,11 @@
 - 路线扩展：考虑一库/两库反弹路线的可行性判定与容错窗口。
 
 ## 代码参考索引
-- 决策主逻辑 [decision](file:///d:/SJTU/2025.9/Principles_and_Applications_of_Artificial_Intelligence/Final_Project/agents/new_agent.py#L19-L63)
-- 幽灵球计算 [_ghost_target](file:///d:/SJTU/2025.9/Principles_and_Applications_of_Artificial_Intelligence/Final_Project/agents/new_agent.py#L69-L79)
-- 直线遮挡判定 [_has_clear_path](file:///d:/SJTU/2025.9/Principles_and_Applications_of_Artificial_Intelligence/Final_Project/agents/new_agent.py#L81-L97)
-- 候选生成 [_generate_candidates](file:///d:/SJTU/2025.9/Principles_and_Applications_of_Artificial_Intelligence/Final_Project/agents/new_agent.py#L99-L147)
-- 带噪仿真 [_simulate_action](file:///d:/SJTU/2025.9/Principles_and_Applications_of_Artificial_Intelligence/Final_Project/agents/new_agent.py#L149-L164)
-- 规则一致评分 [_analyze_shot_for_reward](file:///d:/SJTU/2025.9/Principles_and_Applications_of_Artificial_Intelligence/Final_Project/agents/new_agent.py#L166-L220)
+ - 决策主逻辑 [decision](file:///d:/SJTU/2025.9/Principles_and_Applications_of_Artificial_Intelligence/Final_Project/agents/new_agent.py#L19-L130)
+ - 幽灵球计算 [_ghost_target](file:///d:/SJTU/2025.9/Principles_and_Applications_of_Artificial_Intelligence/Final_Project/agents/new_agent.py#L136-L146)
+ - 直线遮挡判定 [_has_clear_path](file:///d:/SJTU/2025.9/Principles_and_Applications_of_Artificial_Intelligence/Final_Project/agents/new_agent.py#L148-L165)
+ - 候选生成 [_generate_candidates](file:///d:/SJTU/2025.9/Principles_and_Applications_of_Artificial_Intelligence/Final_Project/agents/new_agent.py#L184-L264)
+ - 安全球生成 [_generate_safety_candidates](file:///d:/SJTU/2025.9/Principles_and_Applications_of_Artificial_Intelligence/Final_Project/agents/new_agent.py#L266-L292)
+ - 带噪仿真 [_simulate_action](file:///d:/SJTU/2025.9/Principles_and_Applications_of_Artificial_Intelligence/Final_Project/agents/new_agent.py#L294-L309)
+ - 局部微调 [_local_refine](file:///d:/SJTU/2025.9/Principles_and_Applications_of_Artificial_Intelligence/Final_Project/agents/new_agent.py#L311-L312)
+ - 规则一致评分 [_analyze_shot_for_reward](file:///d:/SJTU/2025.9/Principles_and_Applications_of_Artificial_Intelligence/Final_Project/agents/new_agent.py#L376-L434)

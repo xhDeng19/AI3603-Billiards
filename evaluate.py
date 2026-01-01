@@ -16,6 +16,27 @@ evaluate.py - Agent 评估脚本
 from utils import set_random_seed
 from poolenv import PoolEnv
 from agents import BasicAgent, BasicAgentPro, NewAgent
+import os
+import sys
+from datetime import datetime
+
+class Tee:
+    def __init__(self, *streams):
+        self.streams = streams
+    def write(self, data):
+        for s in self.streams:
+            s.write(data)
+            s.flush()
+    def flush(self):
+        for s in self.streams:
+            s.flush()
+
+log_dir = os.path.join(os.path.dirname(__file__), 'log')
+os.makedirs(log_dir, exist_ok=True)
+log_path = os.path.join(log_dir, datetime.now().strftime('%Y-%m-%d_%H-%M-%S') + '.log')
+_log_file = open(log_path, 'w', encoding='utf-8')
+sys.stdout = Tee(sys.stdout, _log_file)
+sys.stderr = Tee(sys.stderr, _log_file)
 
 # 设置随机种子，enable=True 时使用固定种子，enable=False 时使用完全随机
 # 根据需求，我们在这里统一设置随机种子，确保 agent 双方的全局击球扰动使用相同的随机状态
@@ -23,7 +44,7 @@ set_random_seed(enable=False, seed=42)
 
 env = PoolEnv()
 results = {'AGENT_A_WIN': 0, 'AGENT_B_WIN': 0, 'SAME': 0}
-n_games = 120  # 对战局数 自己测试时可以修改 扩充为120局为了减少随机带来的扰动
+n_games = 40  # 对战局数 自己测试时可以修改 扩充为120局为了减少随机带来的扰动
 
 ## 选择对打的对手
 agent_a, agent_b = BasicAgent(), NewAgent() # 与 BasicAgent 对打
@@ -77,3 +98,4 @@ results['AGENT_A_SCORE'] = results['AGENT_A_WIN'] * 1 + results['SAME'] * 0.5
 results['AGENT_B_SCORE'] = results['AGENT_B_WIN'] * 1 + results['SAME'] * 0.5
 
 print("\n最终结果：", results)
+print("日志文件:", log_path)

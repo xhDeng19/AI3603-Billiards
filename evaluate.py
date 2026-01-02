@@ -19,6 +19,7 @@ from agents import BasicAgent, BasicAgentPro, NewAgent
 import os
 import sys
 from datetime import datetime
+import time
 
 class Tee:
     def __init__(self, *streams):
@@ -57,17 +58,27 @@ for i in range(n_games):
     print()
     print(f"------- 第 {i} 局比赛开始 -------")
     env.reset(target_ball=target_ball_choice[i % 4])
-    player_class = players[i % 2].__class__.__name__
+    agent_A_idx = i % 2
+    agent_B_idx = (i + 1) % 2
+    player_class = players[agent_A_idx].__class__.__name__
     ball_type = target_ball_choice[i % 4]
     print(f"本局 Player A: {player_class}, 目标球型: {ball_type}")
+    game_think_time_A = 0.0
+    game_think_time_B = 0.0
+    agent_A_name = players[agent_A_idx].__class__.__name__
+    agent_B_name = players[agent_B_idx].__class__.__name__
     while True:
         player = env.get_curr_player()
         print(f"[第{env.hit_count}次击球] player: {player}")
         obs = env.get_observation(player)
         if player == 'A':
-            action = players[i % 2].decision(*obs)
+            _ts = time.perf_counter()
+            action = players[agent_A_idx].decision(*obs)
+            game_think_time_A += time.perf_counter() - _ts
         else:
-            action = players[(i + 1) % 2].decision(*obs)
+            _ts = time.perf_counter()
+            action = players[agent_B_idx].decision(*obs)
+            game_think_time_B += time.perf_counter() - _ts
         step_info = env.take_shot(action)
         
         done, info = env.get_done()
@@ -91,6 +102,10 @@ for i in range(n_games):
                 results[['AGENT_A_WIN', 'AGENT_B_WIN'][i % 2]] += 1
             else:
                 results[['AGENT_A_WIN', 'AGENT_B_WIN'][(i+1) % 2]] += 1
+            print(f"本局思考总时长：AGENT_A({agent_A_name})={game_think_time_A:.2f}s, AGENT_B({agent_B_name})={game_think_time_B:.2f}s")
+            if 'THINK_TIMES' not in results:
+                results['THINK_TIMES'] = []
+            results['THINK_TIMES'].append({'AGENT_A': round(game_think_time_A, 2), 'AGENT_B': round(game_think_time_B, 2)})
             break
 
 # 计算分数：胜1分，负0分，平局0.5
